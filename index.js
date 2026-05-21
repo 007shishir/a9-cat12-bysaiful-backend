@@ -462,6 +462,125 @@ async function run() {
       }
     });
 
+/* ==========================================================
+       4.7 Get User Bookings with Status (GET /api/my-bookings)
+       ========================================================== */
+    app.get('/api/my-bookings', async (req, res) => {
+      try {
+        const userId = req.headers['x-user-id'];
+        if (!userId) {
+          return res.status(401).json({ success: false, message: "Unauthorized." });
+        }
+
+        const userBookings = await bookingsCollection.aggregate([
+          { $match: { userId: userId } },
+          {
+            $addFields: { roomObjectId: { $toObjectId: "$roomId" } }
+          },
+          {
+            $lookup: {
+              from: "rooms",
+              localField: "roomObjectId",
+              foreignField: "_id",
+              as: "roomDetails"
+            }
+          },
+          { $unwind: "$roomDetails" },
+          {
+            $project: {
+              _id: 1,
+              roomId: 1,
+              startTime: 1,
+              endTime: 1,
+              createdAt: 1,
+              status: { $ifNull: ["$status", "confirmed"] }, // Fallback to confirmed if undefined
+              roomInfo: {
+                name: "$roomDetails.name",
+                image: "$roomDetails.image",
+                floor: "$roomDetails.floor",
+                hourlyRate: "$roomDetails.hourlyRate"
+              }
+            }
+          },
+          { $sort: { startTime: -1 } }
+        ]).toArray();
+
+        return res.status(200).json({ success: true, data: userBookings });
+      } catch (error) {
+        console.error("Aggregation crash error in GET /api/my-bookings:", error);
+        return res.status(500).json({ success: false, message: "Internal server error." });
+      }
+    });
+
+/* ==========================================================
+   5.3 Cancel Booking - Private (PATCH /api/bookings/:id/cancel)
+   ========================================================== */
+app.patch('/api/bookings/:id/cancel', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'];
+
+    if (!userId || !ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid identification parameters." });
+    }
+
+    const booking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking record not found." });
+    }
+
+    // Server verifies the booking belongs strictly to the user
+    if (booking.userId !== userId) {
+      return res.status(403).json({ success: false, message: "Forbidden: You do not own this booking." });
+    }
+
+    // 1. Update status to "cancelled"
+    await bookingsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: "cancelled" } }
+    );
+
+    // 2. Uses $pull to remove the booking ID from the user's bookings array
+    // (Assuming your users collection is named 'usersCollection')
+    if (db.collection("users")) {
+      await db.collection("users").updateOne(
+        { _id: new ObjectId(userId) },
+        { $pull: { bookings: id } }
+      );
+    }
+
+    // 3. Decrement the room's bookingCount by -1 to keep it accurate
+    if (booking.roomId && ObjectId.isValid(booking.roomId)) {
+      await roomsCollection.updateOne(
+        { _id: new ObjectId(booking.roomId) },
+        { $inc: { bookingCount: -1 } }
+      );
+    }
+
+    return res.status(200).json({ success: true, message: "Booking cancelled" });
+  } catch (error) {
+    console.error("Cancellation routing error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error." });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
