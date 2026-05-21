@@ -100,6 +100,43 @@ async function run() {
       }
     });
 
+    /* ==========================================================
+       4.2 Get User Listings (GET /api/my-listings)
+       ========================================================== */
+    app.get('/api/my-listings', async (req, res) => {
+      try {
+        // Extract owner ID via request headers passed from the client
+        const ownerId = req.headers['x-user-id'];
+
+        if (!ownerId) {
+          return res.status(401).json({
+            success: false,
+            message: "Unauthorized access: An authenticated session identifier is required."
+          });
+        }
+
+        // Query the database for rooms where 'owner' strictly equals the active ownerId
+        const cursor = roomsCollection.find({ owner: ownerId });
+        const myListings = await cursor.toArray();
+
+        return res.status(200).json({
+          success: true,
+          data: myListings
+        });
+
+      } catch (error) {
+        console.error("Error inside GET /api/my-listings route:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error occurred while retrieving user listings."
+        });
+      }
+    });
+
+
+
+    
+
 
 
 
