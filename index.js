@@ -6,8 +6,30 @@ const port = process.env.PORT || 5000;
 
 const uri = process.env.MONGO_URI;
 
-const cors = require("cors");
-app.use(cors());
+// 1. Dynamic CORS Policy and Request Interception Layout Engine
+const allowedOrigins = [
+  "https://a9-cat12-bysaiful.vercel.app",
+  "http://localhost:3000" // Kept for seamless local testing layout environments
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  
+  if (allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
+  
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, x-user-id");
+
+  // Instantly return 200 OK for browser preflight OPTIONS checks
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -21,13 +43,9 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
-
     // Select the studyNook database and target collection
     const db = client.db("study-nook");
     const roomsCollection = db.collection("rooms");
-    // Select additional collection instance for bookings management
     const bookingsCollection = db.collection("bookings");
 
     /* ==========================================================
@@ -45,20 +63,15 @@ async function run() {
           amenities,
         } = req.body;
 
-        // 1. Better-Auth Identity Processing Extraction
-        // Extracting user tracking details directly from standard headers passed by Better-Auth client.
-        // During testing, if you don't have authentication setup yet, you can fallback to a dummy user ID string.
         const userId = req.headers["x-user-id"] || req.body.owner;
 
         if (!userId) {
           return res.status(401).json({
             success: false,
-            message:
-              "Unauthorized access: An authenticated session identifier is required.",
+            message: "Unauthorized access: An authenticated session identifier is required.",
           });
         }
 
-        // 2. Clear Payload Check Validation
         if (
           !name ||
           !description ||
@@ -69,12 +82,10 @@ async function run() {
         ) {
           return res.status(400).json({
             success: false,
-            message:
-              "Missing parameters. Name, description, image, floor, capacity, and hourlyRate are required fields.",
+            message: "Missing parameters. Name, description, image, floor, capacity, and hourlyRate are required fields.",
           });
         }
 
-        // 3. Assemble Safe Structural Document Schema
         const newRoomDocument = {
           name: name.trim(),
           description: description,
@@ -82,15 +93,13 @@ async function run() {
           floor: floor,
           capacity: Number(capacity),
           hourlyRate: Number(hourlyRate),
-          // Ensure amenities compiles down safely into a structured array of strings
           amenities: Array.isArray(amenities) ? amenities : [],
-          owner: userId, // Establishes explicit ownership for subsequent edit/delete comparisons
+          owner: userId,
           bookingCount: 0,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
 
-        // 4. Perform Database Write Operation
         const result = await roomsCollection.insertOne(newRoomDocument);
 
         return res.status(201).json({
@@ -102,8 +111,7 @@ async function run() {
         console.error("Error inside POST /api/rooms route:", error);
         return res.status(500).json({
           success: false,
-          message:
-            "Internal server error occurred while writing database logs.",
+          message: "Internal server error occurred while writing database logs.",
         });
       }
     });
@@ -113,18 +121,15 @@ async function run() {
        ========================================================== */
     app.get("/api/my-listings", async (req, res) => {
       try {
-        // Extract owner ID via request headers passed from the client
         const ownerId = req.headers["x-user-id"];
 
         if (!ownerId) {
           return res.status(401).json({
             success: false,
-            message:
-              "Unauthorized access: An authenticated session identifier is required.",
+            message: "Unauthorized access: An authenticated session identifier is required.",
           });
         }
 
-        // Query the database for rooms where 'owner' strictly equals the active ownerId
         const cursor = roomsCollection.find({ owner: ownerId });
         const myListings = await cursor.toArray();
 
@@ -136,8 +141,7 @@ async function run() {
         console.error("Error inside GET /api/my-listings route:", error);
         return res.status(500).json({
           success: false,
-          message:
-            "Internal server error occurred while retrieving user listings.",
+          message: "Internal server error occurred while retrieving user listings.",
         });
       }
     });
@@ -147,7 +151,6 @@ async function run() {
        ========================================================== */
     app.get("/api/rooms", async (req, res) => {
       try {
-        // Fetch all listed workspaces without applying user ownership blocks
         const cursor = roomsCollection.find({});
         const allRooms = await cursor.toArray();
 
@@ -159,8 +162,7 @@ async function run() {
         console.error("Error inside GET /api/rooms public route:", error);
         return res.status(500).json({
           success: false,
-          message:
-            "Internal server error occurred while pulling public rooms catalog.",
+          message: "Internal server error occurred while pulling public rooms catalog.",
         });
       }
     });
@@ -170,7 +172,6 @@ async function run() {
        ========================================================== */
     app.get("/api/home-rooms", async (req, res) => {
       try {
-        // Sort by createdAt descending (-1) and limit to exactly 6 records
         const latestRooms = await roomsCollection
           .find({})
           .sort({ createdAt: -1 })
@@ -185,68 +186,46 @@ async function run() {
         console.error("Error inside GET /api/home-rooms route:", error);
         return res.status(500).json({
           success: false,
-          message:
-            "Internal server error occurred while pulling latest home rooms.",
+          message: "Internal server error occurred while pulling latest home rooms.",
         });
       }
     });
 
-
-
     /* ==========================================================
-   4.5 GET Single Room Details (GET /api/rooms/:id) - Public
-   ========================================================== */
+       4.5 GET Single Room Details (GET /api/rooms/:id) - Public
+       ========================================================== */
     app.get("/api/rooms/:id", async (req, res) => {
       try {
         const { id } = req.params;
-
-        // 1. Sanitize the incoming string to clear accidental hidden characters
         const cleanId = id ? id.trim() : "";
 
-        console.log(`[Backend API] Received request for Room ID: "${cleanId}"`);
-
-        // 2. Validate format before passing it to the ObjectId constructor
         if (!ObjectId.isValid(cleanId)) {
-          console.warn(
-            `[Backend API] Rejected invalid ObjectId format: "${cleanId}"`,
-          );
           return res.status(400).json({
             success: false,
             message: "The provided structural room ID format is invalid.",
           });
         }
 
-        // 3. Query using the verified identifier wrapper
         const room = await roomsCollection.findOne({
           _id: new ObjectId(cleanId),
         });
 
         if (!room) {
-          console.log(
-            `[Backend API] No room found matching identifier: ${cleanId}`,
-          );
           return res.status(404).json({
             success: false,
             message: "Target workspace space could not be found.",
           });
         }
 
-        // Success response
         return res.status(200).json({
           success: true,
           data: room,
         });
       } catch (error) {
-        // This logs the exact database processing error to your backend terminal window
-        console.error(
-          "[Backend API Fatal Error] Exception inside GET /api/rooms/:id:",
-          error,
-        );
-
+        console.error("[Backend API Fatal Error] Exception inside GET /api/rooms/:id:", error);
         return res.status(500).json({
           success: false,
-          message:
-            "Internal server error occurred while retrieving room specifications.",
+          message: "Internal server error occurred while retrieving room specifications.",
           errorDetails: error.message,
         });
       }
@@ -261,34 +240,26 @@ async function run() {
         const userId = req.headers["x-user-id"];
 
         if (!userId) {
-          return res
-            .status(401)
-            .json({ success: false, message: "Authentication required." });
+          return res.status(401).json({ success: false, message: "Authentication required." });
         }
 
         if (!roomId || !startTime || !endTime) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Missing required booking variables.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Missing required booking variables.",
+          });
         }
 
         const start = new Date(startTime);
         const end = new Date(endTime);
 
         if (start >= end) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "End time must be after start time.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "End time must be after start time.",
+          });
         }
 
-        // Overlapping Check Logic using $gte and $lte parameters
-        // A conflict occurs if an existing booking starts before our request ends AND ends after our request starts
         const conflict = await bookingsCollection.findOne({
           roomId: roomId,
           startTime: { $lt: end },
@@ -298,12 +269,10 @@ async function run() {
         if (conflict) {
           return res.status(409).json({
             success: false,
-            message:
-              "Time slot conflict! The room is already reserved during this specific window.",
+            message: "Time slot conflict! The room is already reserved during this specific window.",
           });
         }
 
-        // Insert new booking log document
         const newBooking = {
           roomId,
           userId,
@@ -313,23 +282,18 @@ async function run() {
         };
         await bookingsCollection.insertOne(newBooking);
 
-        // Atomic update incrementing targeted room's booking counter tracker metric
         await roomsCollection.updateOne(
           { _id: new ObjectId(roomId) },
-          { $inc: { bookingCount: 1 } },
+          { $set: { status: "confirmed" }, $inc: { bookingCount: 1 } }
         );
 
-        return res
-          .status(201)
-          .json({ success: true, message: "Room slot booked successfully!" });
+        return res.status(201).json({ success: true, message: "Room slot booked successfully!" });
       } catch (error) {
         console.error("Booking handler error:", error);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            message: "Internal server error processing booking.",
-          });
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error processing booking.",
+        });
       }
     });
 
@@ -343,48 +307,34 @@ async function run() {
         const updateData = req.body;
 
         if (!userId || !ObjectId.isValid(id)) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Invalid parameters or unauthorized.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Invalid parameters or unauthorized.",
+          });
         }
 
         const targetRoom = await roomsCollection.findOne({
           _id: new ObjectId(id),
         });
         if (!targetRoom) {
-          return res
-            .status(404)
-            .json({ success: false, message: "Room not found." });
+          return res.status(404).json({ success: false, message: "Room not found." });
         }
 
-        // Enforce Server Ownership Validation Gate Check
         if (targetRoom.owner !== userId) {
-          return res
-            .status(403)
-            .json({
-              success: false,
-              message: "Forbidden: You do not own this listing layout.",
-            });
+          return res.status(403).json({
+            success: false,
+            message: "Forbidden: You do not own this listing layout.",
+          });
         }
 
-        // Build clean atomic updates maps
         const cleanPayload = {
           name: updateData.name?.trim() || targetRoom.name,
           description: updateData.description || targetRoom.description,
           image: updateData.image || targetRoom.image,
           floor: updateData.floor || targetRoom.floor,
-          capacity: updateData.capacity
-            ? Number(updateData.capacity)
-            : targetRoom.capacity,
-          hourlyRate: updateData.hourlyRate
-            ? Number(updateData.hourlyRate)
-            : targetRoom.hourlyRate,
-          amenities: Array.isArray(updateData.amenities)
-            ? updateData.amenities
-            : targetRoom.amenities,
+          capacity: updateData.capacity ? Number(updateData.capacity) : targetRoom.capacity,
+          hourlyRate: updateData.hourlyRate ? Number(updateData.hourlyRate) : targetRoom.hourlyRate,
+          amenities: Array.isArray(updateData.amenities) ? updateData.amenities : targetRoom.amenities,
           updatedAt: new Date(),
         };
 
@@ -392,14 +342,10 @@ async function run() {
           { _id: new ObjectId(id) },
           { $set: cleanPayload },
         );
-        return res
-          .status(200)
-          .json({ success: true, message: "Room updated successfully" });
+        return res.status(200).json({ success: true, message: "Room updated successfully" });
       } catch (error) {
         console.error("Update endpoint exception:", error);
-        return res
-          .status(500)
-          .json({ success: false, message: "Server update processing error." });
+        return res.status(500).json({ success: false, message: "Server update processing error." });
       }
     });
 
@@ -412,57 +358,43 @@ async function run() {
         const userId = req.headers["x-user-id"];
 
         if (!userId || !ObjectId.isValid(id)) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Bad credentials payload requested.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Bad credentials payload requested.",
+          });
         }
 
         const targetRoom = await roomsCollection.findOne({
           _id: new ObjectId(id),
         });
         if (!targetRoom) {
-          return res
-            .status(404)
-            .json({
-              success: false,
-              message: "Target listing profile does not exist.",
-            });
+          return res.status(404).json({
+            success: false,
+            message: "Target listing profile does not exist.",
+          });
         }
 
-        // Server side verification block matching request session key
         if (targetRoom.owner !== userId) {
-          return res
-            .status(403)
-            .json({
-              success: false,
-              message: "Access Denied: Action restricted to owner assets.",
-            });
+          return res.status(403).json({
+            success: false,
+            message: "Access Denied: Action restricted to owner assets.",
+          });
         }
 
-        // Optional Cascading Task: Remove all tracking references from bookings collection
         await bookingsCollection.deleteMany({ roomId: id });
-
-        // Wipe core document from primary tracking collections indexes
         await roomsCollection.deleteOne({ _id: new ObjectId(id) });
 
-        return res
-          .status(200)
-          .json({ success: true, message: "Room deleted successfully" });
+        return res.status(200).json({ success: true, message: "Room deleted successfully" });
       } catch (error) {
         console.error("Delete endpoint exception:", error);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            message: "Server database execution failure.",
-          });
+        return res.status(500).json({
+          success: false,
+          message: "Server database execution failure.",
+        });
       }
     });
 
-/* ==========================================================
+    /* ==========================================================
        4.7 Get User Bookings with Status (GET /api/my-bookings)
        ========================================================== */
     app.get('/api/my-bookings', async (req, res) => {
@@ -493,7 +425,7 @@ async function run() {
               startTime: 1,
               endTime: 1,
               createdAt: 1,
-              status: { $ifNull: ["$status", "confirmed"] }, // Fallback to confirmed if undefined
+              status: { $ifNull: ["$status", "confirmed"] },
               roomInfo: {
                 name: "$roomDetails.name",
                 image: "$roomDetails.image",
@@ -512,91 +444,69 @@ async function run() {
       }
     });
 
-/* ==========================================================
-   5.3 Cancel Booking - Private (PATCH /api/bookings/:id/cancel)
-   ========================================================== */
-app.patch('/api/bookings/:id/cancel', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.headers['x-user-id'];
+    /* ==========================================================
+       5.3 Cancel Booking - Private (PATCH /api/bookings/:id/cancel)
+       ========================================================== */
+    app.patch('/api/bookings/:id/cancel', async (req, res) => {
+      try {
+        const { id } = req.params;
+        const userId = req.headers['x-user-id'];
 
-    if (!userId || !ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid identification parameters." });
-    }
+        if (!userId || !ObjectId.isValid(id)) {
+          return res.status(400).json({ success: false, message: "Invalid identification parameters." });
+        }
 
-    const booking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
-    if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking record not found." });
-    }
+        const booking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
+        if (!booking) {
+          return res.status(404).json({ success: false, message: "Booking record not found." });
+        }
 
-    // Server verifies the booking belongs strictly to the user
-    if (booking.userId !== userId) {
-      return res.status(403).json({ success: false, message: "Forbidden: You do not own this booking." });
-    }
+        if (booking.userId !== userId) {
+          return res.status(403).json({ success: false, message: "Forbidden: You do not own this booking." });
+        }
 
-    // 1. Update status to "cancelled"
-    await bookingsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: "cancelled" } }
-    );
+        await bookingsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "cancelled" } }
+        );
 
-    // 2. Uses $pull to remove the booking ID from the user's bookings array
-    // (Assuming your users collection is named 'usersCollection')
-    if (db.collection("users")) {
-      await db.collection("users").updateOne(
-        { _id: new ObjectId(userId) },
-        { $pull: { bookings: id } }
-      );
-    }
+        if (db.collection("users")) {
+          await db.collection("users").updateOne(
+            { _id: new ObjectId(userId) },
+            { $pull: { bookings: id } }
+          );
+        }
 
-    // 3. Decrement the room's bookingCount by -1 to keep it accurate
-    if (booking.roomId && ObjectId.isValid(booking.roomId)) {
-      await roomsCollection.updateOne(
-        { _id: new ObjectId(booking.roomId) },
-        { $inc: { bookingCount: -1 } }
-      );
-    }
+        if (booking.roomId && ObjectId.isValid(booking.roomId)) {
+          await roomsCollection.updateOne(
+            { _id: new ObjectId(booking.roomId) },
+            { $inc: { bookingCount: -1 } }
+          );
+        }
 
-    return res.status(200).json({ success: true, message: "Booking cancelled" });
+        return res.status(200).json({ success: true, message: "Booking cancelled" });
+      } catch (error) {
+        console.error("Cancellation routing error:", error);
+        return res.status(500).json({ success: false, message: "Internal server error." });
+      }
+    });
+
   } catch (error) {
-    console.error("Cancellation routing error:", error);
-    return res.status(500).json({ success: false, message: "Internal server error." });
-  }
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
-    // console.log(
-    //   "Pinged your deployment. You successfully connected to MongoDB!",
-    // );
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+    console.error("Database connection runtime loop error:", error);
   }
 }
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("Hello World!");
+  res.send("StudyNook Server operational.");
 });
 
-app.listen(port, () => {
-  console.log(`Example app listening at ${process.env.Localhost}`);
-});
+// 2. Safe Listener conditional gate protecting serverless allocations
+if (process.env.NODE_ENV !== "production") {
+  app.listen(port, () => {
+    console.log(`Server listening locally at port ${port}`);
+  });
+}
+
+// 3. Mandatory export mapping for seamless Vercel integration 
+module.exports = app;
