@@ -157,6 +157,31 @@ async function run() {
       }
     });
 
+    /* ==========================================================
+       4.4 Get Latest 6 Rooms (GET /api/home-rooms) - Public Route
+       ========================================================== */
+    app.get('/api/home-rooms', async (req, res) => {
+      try {
+        // Sort by createdAt descending (-1) and limit to exactly 6 records
+        const latestRooms = await roomsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .toArray();
+
+        return res.status(200).json({
+          success: true,
+          data: latestRooms
+        });
+      } catch (error) {
+        console.error("Error inside GET /api/home-rooms route:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error occurred while pulling latest home rooms."
+        });
+      }
+    });
+
 
 
 
