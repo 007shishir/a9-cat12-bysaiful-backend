@@ -135,7 +135,27 @@ async function run() {
 
 
 
-    
+    /* ==========================================================
+       4.3 Get All Rooms (GET /api/rooms) - Public Route
+       ========================================================== */
+    app.get('/api/rooms', async (req, res) => {
+      try {
+        // Fetch all listed workspaces without applying user ownership blocks
+        const cursor = roomsCollection.find({});
+        const allRooms = await cursor.toArray();
+
+        return res.status(200).json({
+          success: true,
+          data: allRooms
+        });
+      } catch (error) {
+        console.error("Error inside GET /api/rooms public route:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error occurred while pulling public rooms catalog."
+        });
+      }
+    });
 
 
 
