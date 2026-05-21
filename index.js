@@ -1,10 +1,13 @@
 const express = require("express");
 const app = express();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 const port = process.env.PORT || 5000;
 
 const uri = process.env.MONGO_URI;
+const JWT_SECRET = process.env.JWT_SECRET || "fallback_secret";
 
 // 1. Dynamic CORS Policy and Request Interception Layout Engine
 const allowedOrigins = [
@@ -31,6 +34,31 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use(cookieParser());
+
+// Authenticated Route Guard Middleware
+const authMiddleware = (req, res, next) => {
+  const token = req.cookies.token;
+  
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Access token missing. Please log in.",
+    });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = { id: decoded.userId, role: decoded.role };
+    next();
+  } catch (error) {
+    console.error("JWT Verification Error:", error);
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or expired access token.",
+    });
+  }
+};
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -49,9 +77,71 @@ async function run() {
     const bookingsCollection = db.collection("bookings");
 
     /* ==========================================================
+       Authentication Endpoints (JWT Cookie Management)
+       ========================================================== */
+    app.post("/api/auth/jwt", async (req, res) => {
+      try {
+        const { userId, role } = req.body;
+
+        if (!userId) {
+          return res.status(400).json({
+            success: false,
+            message: "Missing userId in request body.",
+          });
+        }
+
+        // Generate JWT token containing userId and optionally role
+        const token = jwt.sign({ userId, role }, JWT_SECRET, {
+          expiresIn: "7D",
+        });
+
+        // Store the token in an HTTP-only cookie
+        res.cookie("token", token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Authentication successful, token generated.",
+        });
+      } catch (error) {
+        console.error("Error in POST /api/auth/jwt:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error during authentication token generation.",
+        });
+      }
+    });
+
+    app.post("/api/auth/logout", async (req, res) => {
+      try {
+        res.clearCookie("token", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Logout successful, cookie cleared.",
+        });
+      } catch (error) {
+        console.error("Error in POST /api/auth/logout:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Internal server error during logout.",
+        });
+      }
+    });
+
+
+    /* ==========================================================
        4.1 Add Room (POST /api/rooms)
        ========================================================== */
-    app.post("/api/rooms", async (req, res) => {
+    app.post("/api/rooms", authMiddleware, async (req, res) => {
       try {
         const {
           name,
@@ -63,14 +153,8 @@ async function run() {
           amenities,
         } = req.body;
 
-        const userId = req.headers["x-user-id"] || req.body.owner;
+        const userId = req.user.id;
 
-        if (!userId) {
-          return res.status(401).json({
-            success: false,
-            message: "Unauthorized access: An authenticated session identifier is required.",
-          });
-        }
 
         if (
           !name ||
@@ -119,16 +203,10 @@ async function run() {
     /* ==========================================================
        4.2 Get User Listings (GET /api/my-listings)
        ========================================================== */
-    app.get("/api/my-listings", async (req, res) => {
+    app.get("/api/my-listings", authMiddleware, async (req, res) => {
       try {
-        const ownerId = req.headers["x-user-id"];
+        const ownerId = req.user.id;
 
-        if (!ownerId) {
-          return res.status(401).json({
-            success: false,
-            message: "Unauthorized access: An authenticated session identifier is required.",
-          });
-        }
 
         const cursor = roomsCollection.find({ owner: ownerId });
         const myListings = await cursor.toArray();
@@ -234,14 +312,11 @@ async function run() {
     /* ==========================================================
        4.6 Secure Booking with Overlap Check (POST /api/bookings)
        ========================================================== */
-    app.post("/api/bookings", async (req, res) => {
+    app.post("/api/bookings", authMiddleware, async (req, res) => {
       try {
         const { roomId, startTime, endTime } = req.body;
-        const userId = req.headers["x-user-id"];
+        const userId = req.user.id;
 
-        if (!userId) {
-          return res.status(401).json({ success: false, message: "Authentication required." });
-        }
 
         if (!roomId || !startTime || !endTime) {
           return res.status(400).json({
@@ -300,16 +375,16 @@ async function run() {
     /* ==========================================================
        4.4 Update Room - Owner Only (PUT /api/rooms/:id)
        ========================================================== */
-    app.put("/api/rooms/:id", async (req, res) => {
+    app.put("/api/rooms/:id", authMiddleware, async (req, res) => {
       try {
         const { id } = req.params;
-        const userId = req.headers["x-user-id"];
+        const userId = req.user.id;
         const updateData = req.body;
 
-        if (!userId || !ObjectId.isValid(id)) {
+        if (!ObjectId.isValid(id)) {
           return res.status(400).json({
             success: false,
-            message: "Invalid parameters or unauthorized.",
+            message: "Invalid room parameter requested.",
           });
         }
 
@@ -352,15 +427,15 @@ async function run() {
     /* ==========================================================
        4.5 Delete Room - Owner Only (DELETE /api/rooms/:id)
        ========================================================== */
-    app.delete("/api/rooms/:id", async (req, res) => {
+    app.delete("/api/rooms/:id", authMiddleware, async (req, res) => {
       try {
         const { id } = req.params;
-        const userId = req.headers["x-user-id"];
+        const userId = req.user.id;
 
-        if (!userId || !ObjectId.isValid(id)) {
+        if (!ObjectId.isValid(id)) {
           return res.status(400).json({
             success: false,
-            message: "Bad credentials payload requested.",
+            message: "Bad room identifier requested.",
           });
         }
 
@@ -397,12 +472,10 @@ async function run() {
     /* ==========================================================
        4.7 Get User Bookings with Status (GET /api/my-bookings)
        ========================================================== */
-    app.get('/api/my-bookings', async (req, res) => {
+    app.get('/api/my-bookings', authMiddleware, async (req, res) => {
       try {
-        const userId = req.headers['x-user-id'];
-        if (!userId) {
-          return res.status(401).json({ success: false, message: "Unauthorized." });
-        }
+        const userId = req.user.id;
+
 
         const userBookings = await bookingsCollection.aggregate([
           { $match: { userId: userId } },
@@ -447,13 +520,13 @@ async function run() {
     /* ==========================================================
        5.3 Cancel Booking - Private (PATCH /api/bookings/:id/cancel)
        ========================================================== */
-    app.patch('/api/bookings/:id/cancel', async (req, res) => {
+    app.patch('/api/bookings/:id/cancel', authMiddleware, async (req, res) => {
       try {
         const { id } = req.params;
-        const userId = req.headers['x-user-id'];
+        const userId = req.user.id;
 
-        if (!userId || !ObjectId.isValid(id)) {
-          return res.status(400).json({ success: false, message: "Invalid identification parameters." });
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ success: false, message: "Invalid booking identification parameters." });
         }
 
         const booking = await bookingsCollection.findOne({ _id: new ObjectId(id) });
